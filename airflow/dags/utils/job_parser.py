@@ -1,246 +1,228 @@
 import json
 import re
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 from lxml import html
 
 logger = logging.getLogger(__name__)
 
-XPATHS = {
-    "title": "//ol/following-sibling::h1",
-    "description": "//div[contains(@class, 'job-post__description')]",
-    "company_links": "//a[contains(@href, '/companies/')]",
-    "breadcrumbs": "//li[contains(@class,'breadcrumb-item')]",
-    "language": "//li[.//*[contains(text(),'Beginner') or contains(text(), 'Intermediate') or contains(text(), 'Advanced') or contains(text(), 'Fluent')]]",
-    "experience": "//li[.//*[contains(text(),'experience')]]",
-    "remote": "//li[.//*[contains(text(),'Remote')]]",
-    "countries": "//li[.//*[contains(text(),'Countries')]]/*[not(div)]",
-    "location": "//li[.//*[contains(@class,'geo')]]",
-    "role": "//ul[.//*[contains(@class,'folder')]]/li[1]",
-    "tags": "//ul[.//*[contains(@class,'folder')]]/li[2]",
-    "domain": "//li[.//*[contains(text(),'Domain')]]",
-    "product": "//li[.//*[contains(@class,'briefcase')]]",
-    "hiring": "//li[.//*[contains(@class,'journal')]]",
-    "jsonld": "//script[contains(@type, 'application/ld+json')]/text()",
-    "stats": {
-        "views": "//*[contains(text(), 'view')]",
-        "applications": "//div[@id='rate-current']//div[contains(text(), 'application')]",
-        "read": "//*[contains(text(), 'read')]",
-        "responded": "//*[contains(text(), 'responded')]"
-    }
-}
 
-
-def text_or_none(el: Optional[Any]) -> Optional[str]:
-    if el is None:
-        return None
-    if isinstance(el, str):
-        return el.strip() or None
+def extract_jsonld_data(doc) -> Dict[str, Any]:
     try:
-        txt = el.text_content().strip()
-        return txt or None
-    except Exception:
-        return None
+        jsonld_scripts = doc.xpath("//script[contains(@type, 'application/ld+json')]/text()")
+        for script in jsonld_scripts:
+            data = json.loads(script)
+            if data.get('@type') == 'JobPosting':
+                result = {
+                    'title': data.get('title'),
+                    'description': data.get('description'),
+                    'djinni_id': data.get('identifier'),
+                    'url': data.get('url'),
+                    'date_posted': data.get('datePosted', '').split('T')[0] if data.get('datePosted') else None,
+                    'employment_type': data.get('employmentType'),
+                    'industry': data.get('industry'),
+                }
+
+                if data.get('estimatedSalary'):
+                    salary = data['estimatedSalary']
+                    result['salary_min'] = salary.get('minValue')
+                    result['salary_max'] = salary.get('maxValue')
+                    result['salary_currency'] = salary.get('currency', 'USD')
+
+                if data.get('experienceRequirements'):
+                    months = data['experienceRequirements'].get('monthsOfExperience')
+                    if months:
+                        result[
+                            'experience_required'] = f"{months / 12:.1f} years" if months >= 12 else f"{int(months)} months"
+
+                if data.get('hiringOrganization'):
+                    org = data['hiringOrganization']
+                    result['company_name'] = org.get('name')
+                    result['company_website'] = org.get('sameAs')
+
+                return result
+    except:
+        pass
+    return {}
 
 
-def first_text(doc, xp: str) -> Optional[str]:
+def safe_xpath_text(doc, xpath: str) -> Optional[str]:
     try:
-        found = doc.xpath(xp)
-        if not found:
-            return None
-        node = found[0] if isinstance(found, list) else found
-        return text_or_none(node)
-    except Exception:
-        return None
+        found = doc.xpath(xpath)
+        if found:
+            return found[0].text_content().strip() or None
+    except:
+        pass
+    return None
 
 
-def extract_djinni_id_from_url(url: str) -> Optional[int]:
+def extract_skills(doc) -> Optional[str]:
+    skills = []
     try:
-        match = re.search(r'/jobs/(\d+)-', url)
-        return int(match.group(1)) if match else None
-    except Exception:
-        return None
+        skill_rows = doc.xpath("//ul[@id='job_extra_info']//table//tr")
+        for row in skill_rows:
+            skill_cells = row.xpath(".//td")
+            if len(skill_cells) >= 2:
+                skill_name = skill_cells[0].text_content().strip()
+                skill_experience = skill_cells[1].text_content().strip()
+                if skill_name:
+                    if skill_experience:
+                        skills.append(f"{skill_name}: {skill_experience}")
+                    else:
+                        skills.append(skill_name)
+    except:
+        pass
+    return ", ".join(skills) if skills else None
 
 
-def extract_company_name(doc) -> Optional[str]:
+def extract_stats(doc) -> Dict[str, Optional[int]]:
+    stats = {}
     try:
-        company_links = doc.xpath(XPATHS["company_links"])
-        if company_links:
-            company_name = text_or_none(company_links[0])
-            if company_name:
-                return company_name
-
-        breadcrumbs = doc.xpath(XPATHS["breadcrumbs"])
-        if len(breadcrumbs) >= 2:
-            company_name = text_or_none(breadcrumbs[1])
-            if company_name:
-                return company_name
-
-        return None
-    except Exception as e:
-        logger.error(f"Error extracting company: {e}")
-        return None
-
-
-def extract_last_publication_stats(doc) -> Dict[str, Optional[int]]:
-    def to_int(s: Optional[str]) -> Optional[int]:
-        if not s:
-            return None
-        m = re.search(r"(\d+)", s.replace(",", ""))
-        return int(m.group(1)) if m else None
-
-    def to_percentage(s: Optional[str]) -> Optional[int]:
-        if not s:
-            return None
-        m = re.search(r"(\d+)%", s.replace(",", ""))
-        return int(m.group(1)) if m else None
-
-    stats = {
-        "last_views": None,
-        "last_applications": None,
-        "last_read": None,
-        "last_responded": None
-    }
-
-    try:
-        for stat_type, xpath in XPATHS["stats"].items():
-            elements = doc.xpath(xpath)
-
-            for element in elements:
-                text = text_or_none(element)
-                if not text:
-                    continue
-
-                if stat_type == "views" and "view" in text.lower():
-                    stats["last_views"] = to_int(text)
-                    logger.info(f"Found views: {text} -> {stats['last_views']}")
-
-                elif stat_type == "applications" and "application" in text.lower():
-                    stats["last_applications"] = to_int(text)
-                    logger.info(f"Found applications: {text} -> {stats['last_applications']}")
-
-                elif stat_type == "read" and "read" in text.lower():
-                    stats["last_read"] = to_percentage(text)
-                    logger.info(f"Found read: {text} -> {stats['last_read']}%")
-
-                elif stat_type == "responded" and "responded" in text.lower():
-                    stats["last_responded"] = to_percentage(text)
-                    logger.info(f"Found responded: {text} -> {stats['last_responded']}%")
-
-        if not any(stats.values()):
-            logger.info("No stats found with specific selectors, trying broader search...")
-
-            all_text = doc.text_content() if hasattr(doc, 'text_content') else ""
-
-            patterns = {
-                "last_views": r"(\d+)\s*view",
-                "last_applications": r"(\d+)\s*application",
-                "last_read": r"(\d+)%\s*read",
-                "last_responded": r"(\d+)%\s*responded"
-            }
-
-            for stat_key, pattern in patterns.items():
-                match = re.search(pattern, all_text, re.IGNORECASE)
-                if match:
-                    stats[stat_key] = int(match.group(1))
-                    logger.info(f"Found {stat_key} via pattern: {match.group(0)} -> {stats[stat_key]}")
-
-    except Exception as e:
-        logger.error(f"Error extracting last publication stats: {e}")
-
+        text = doc.text_content()
+        if m := re.search(r'(\d+)\s*view', text, re.I):
+            stats['last_views'] = int(m.group(1))
+        if m := re.search(r'(\d+)\s*application', text, re.I):
+            stats['last_applications'] = int(m.group(1))
+        if m := re.search(r'(\d+)%\s*read', text, re.I):
+            stats['last_read'] = int(m.group(1))
+        if m := re.search(r'(\d+)%\s*responded', text, re.I):
+            stats['last_responded'] = int(m.group(1))
+    except:
+        pass
     return stats
+
+
+def extract_company_djinni_url(doc) -> Optional[str]:
+    try:
+        company_link = doc.xpath("//a[@data-analytics='company_page']")
+        if company_link:
+            href = company_link[0].get('href')
+            if href and href.startswith('/'):
+                return f"https://djinni.co{href}"
+    except:
+        pass
+    return None
+
+
+def extract_xpath_only_fields(doc) -> Dict[str, Any]:
+    result = {
+        'location': safe_xpath_text(doc, "//li[.//*[contains(@class,'geo')]]"),
+        'remote_info': safe_xpath_text(doc, "//li[.//*[contains(text(),'Remote')]]"),
+        'role': safe_xpath_text(doc, "//ul[@id='job_extra_info']//div[@class='fw-medium']"),
+        'language_requirements': safe_xpath_text(doc,
+                                                 "//li[.//*[contains(text(),'Beginner') or contains(text(), 'Intermediate')]]"),
+        'product_type': safe_xpath_text(doc, "//div[contains(span/@class, 'briefcase ')]/following::div"),
+        'skills': extract_skills(doc),
+        'djinni_company_url': extract_company_djinni_url(doc),
+        'countries': safe_xpath_text(doc, "//span[contains(@class,'location-text')]"),
+    }
+
+    result.update(extract_stats(doc))
+
+    return {k: v for k, v in result.items() if v is not None}
 
 
 def parse_job_html(html_text: str, job_url: str = "") -> Dict[str, Any]:
     try:
         doc = html.fromstring(html_text)
 
-        data = {
-            'djinni_id': extract_djinni_id_from_url(job_url),
-            'url': job_url,
-            'title': first_text(doc, XPATHS["title"]),
-            'company_name': extract_company_name(doc),
-            'description': first_text(doc, XPATHS["description"]),
-            'location': first_text(doc, XPATHS["location"]),
-            'remote_info': first_text(doc, XPATHS["remote"]),
-            'countries': first_text(doc, XPATHS["countries"]),
-            'experience_required': first_text(doc, XPATHS["experience"]),
-            'language_requirements': first_text(doc, XPATHS["language"]),
-            'role': first_text(doc, XPATHS["role"]),
-            'tags': first_text(doc, XPATHS["tags"]),
-            'domain': (first_text(doc, XPATHS["domain"]) or "").replace("Domain: ", ""),
-            'product_type': first_text(doc, XPATHS["product"]),
-            'hiring_type': first_text(doc, XPATHS["hiring"]),
-            'is_active': True
-        }
+        data = extract_jsonld_data(doc)
+        xpath_data = extract_xpath_only_fields(doc)
 
-        last_stats = extract_last_publication_stats(doc)
-        data.update(last_stats)
+        for key, value in xpath_data.items():
+            if key not in data:
+                data[key] = value
 
-        try:
-            jsonld_scripts = doc.xpath(XPATHS["jsonld"])
-            for script in jsonld_scripts:
-                jsonld_data = json.loads(script)
-                salary_info = jsonld_data.get('estimatedSalary', {})
-                if salary_info:
-                    data['salary_min'] = salary_info.get('minValue')
-                    data['salary_max'] = salary_info.get('maxValue')
-                    data['salary_currency'] = salary_info.get('currency', 'USD')
-                    break
-        except:
-            data['salary_min'] = None
-            data['salary_max'] = None
-            data['salary_currency'] = 'USD'
+        data.setdefault('is_active', True)
+        data.setdefault('salary_currency', 'USD')
 
-        logger.info(f"Successfully parsed: {data.get('title')} at {data.get('company_name')}")
+        if not data.get('djinni_id') and job_url:
+            if m := re.search(r'/jobs/(\d+)-', job_url):
+                data['djinni_id'] = int(m.group(1))
+
+        data.setdefault('url', job_url)
+
         return data
 
     except Exception as e:
-        logger.error(f"Error parsing job {job_url}: {e}")
+        logger.error(f"Parse error {job_url}: {e}")
         return {'error': str(e), 'url': job_url}
 
 
-def extract_job_urls_from_catalog_page(html_text: str) -> list[str]:
+def extract_job_urls_from_catalog_page(html_text: str) -> List[str]:
     try:
         doc = html.fromstring(html_text)
-        job_links = doc.xpath("//a[contains(@href, '/jobs/') and contains(@class, 'job-item__title-link')]/@href")
-
-        job_urls = []
-        for link in job_links:
-            if '/jobs/' in link and '-' in link:
-                if link.startswith('/'):
-                    full_url = f"https://djinni.co{link}"
-                else:
-                    full_url = link
-                job_urls.append(full_url)
-
-        unique_urls = list(set(job_urls))
-        logger.info(f"Extracted {len(unique_urls)} job URLs from catalog page")
-        return unique_urls
-
-    except Exception as e:
-        logger.error(f"Error extracting job URLs: {e}")
+        links = doc.xpath("//a[contains(@class, 'job-item__title-link')]/@href")
+        urls = []
+        for link in links:
+            if '/jobs/' in link:
+                url = f"https://djinni.co{link}" if link.startswith('/') else link
+                urls.append(url)
+        return list(set(urls))
+    except:
         return []
 
 
 def test_parser():
-    from crawler_client import CrawlerClient
+    import requests
+    from pprint import pprint
 
-    crawler = CrawlerClient()
-    test_url = "https://djinni.co/jobs/725028-senior-go-engineer/"
+    test_urls = [
+        "https://djinni.co/jobs/781469-senior-devops-engineer/",
+        "https://djinni.co/jobs/725028-senior-go-engineer/",
+    ]
 
-    print(f"🔍 Testing final parser: {test_url}")
+    for url in test_urls:
+        print(f"\n{'=' * 60}")
+        print(f"🔍 TESTING: {url}")
+        print('=' * 60)
 
-    html = crawler.download_single(test_url)
-    if not html:
-        print("Download failed")
-        return
+        try:
+            response = requests.get(url, headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            })
+            response.raise_for_status()
+            html_content = response.text
+            doc = html.fromstring(html_content)
 
-    result = parse_job_html(html, test_url)
+            print("📄 JSON-LD DATA:")
+            jsonld_data = extract_jsonld_data(doc)
+            if jsonld_data:
+                pprint(jsonld_data, width=80)
+            else:
+                print("   ❌ No JSON-LD found")
 
-    print(result)
-    return result
+            print("\n🔧 XPATH-ONLY DATA:")
+            xpath_data = extract_xpath_only_fields(doc)
+            if xpath_data:
+                pprint(xpath_data, width=80)
+            else:
+                print("   ❌ No XPath data found")
+
+            print("\n🎯 FINAL RESULT:")
+            result = parse_job_html(html_content, url)
+            if 'error' in result:
+                print(f"   ❌ ERROR: {result['error']}")
+            else:
+                pprint(result, width=80)
+
+                print(f"\n📊 SUMMARY:")
+                print(f"   Title: {result.get('title', 'N/A')}")
+                print(f"   Company: {result.get('company_name', 'N/A')}")
+                print(f"   Company Website: {result.get('company_website', 'N/A')}")
+                print(
+                    f"   Salary: {result.get('salary_min', 'N/A')}-{result.get('salary_max', 'N/A')} {result.get('salary_currency', 'N/A')}")
+                print(f"   Skills: {result.get('skills', 'N/A')}")
+                print(f"   Product Type: {result.get('product_type', 'N/A')}")
+                print(f"   Djinni Company URL: {result.get('djinni_company_url', 'N/A')}")
+                print(
+                    f"   Stats: views={result.get('last_views', 'N/A')}, apps={result.get('last_applications', 'N/A')}")
+
+        except Exception as e:
+            print(f"❌ FAILED: {e}")
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    print("🚀 Starting parser test...")
     test_parser()

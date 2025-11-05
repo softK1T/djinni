@@ -43,7 +43,6 @@ def extract_catalog_urls(**context):
 
 
 def save_catalog_to_db(**context):
-    """Step 2: Save catalog URLs to job_catalog table"""
     job_urls = context['task_instance'].xcom_pull(key='job_urls', task_ids='extract_catalog')
 
     if not job_urls:

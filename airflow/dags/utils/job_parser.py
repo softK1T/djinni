@@ -203,7 +203,7 @@ def parse_job_html(html_text: str, job_url: str = "") -> Dict[str, Any]:
 def extract_job_urls_from_catalog_page(html_text: str) -> list[str]:
     try:
         doc = html.fromstring(html_text)
-        job_links = doc.xpath("//a[contains(@href, '/jobs/') and contains(@href, '-')]/@href")
+        job_links = doc.xpath("//a[contains(@href, '/jobs/') and contains(@class, 'job-item__title-link')]/@href")
 
         job_urls = []
         for link in job_links:
@@ -233,7 +233,7 @@ def test_parser():
 
     html = crawler.download_single(test_url)
     if not html:
-        print("❌ Download failed")
+        print("Download failed")
         return
 
     result = parse_job_html(html, test_url)

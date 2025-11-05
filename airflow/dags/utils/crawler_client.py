@@ -10,8 +10,28 @@ logger = logging.getLogger(__name__)
 
 
 class CrawlerClient:
-    def __init__(self, base_url: str = "http://localhost:8000"):
-        self.base_url = base_url.rstrip('/')
+    def __init__(self, base_url: str = None):
+        if base_url is None:
+            test_addresses = [
+                "http://host.docker.internal:8000",
+                "http://172.17.0.1:8000",
+                "http://localhost:8000"
+            ]
+
+            for addr in test_addresses:
+                try:
+                    response = requests.get(f"{addr}/health", timeout=2)
+                    if response.status_code == 200:
+                        self.base_url = addr
+                        logger.info(f"✅ Connected to crawler at: {addr}")
+                        return
+                except:
+                    continue
+
+            self.base_url = "http://localhost:8000"
+            logger.warning("⚠️ Using fallback address - crawler might not be reachable")
+        else:
+            self.base_url = base_url.rstrip('/')
 
     def test_connection(self) -> bool:
         try:

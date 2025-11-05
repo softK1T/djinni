@@ -1,91 +1,108 @@
 import requests
 import time
+import logging
 import base64
 import gzip
-from typing import List, Dict, Any, Optional
-import logging
-from urllib.parse import quote
 
 logger = logging.getLogger(__name__)
 
 
+def decode_html_content(body: str) -> str:
+    try:
+        compressed_data = base64.b64decode(body)
+        html = gzip.decompress(compressed_data).decode('utf-8')
+        return html
+    except Exception as e:
+        logger.warning(f"Failed to decode content: {e}")
+        return body
+
+
 class CrawlerClient:
-    def __init__(self, base_url: str = None):
-        if base_url is None:
-            test_addresses = [
-                "http://host.docker.internal:8000",
-                "http://172.17.0.1:8000",
-                "http://localhost:8000"
-            ]
+    def __init__(self, base_url: str = "http://host.docker.internal:8000", timeout: int = 30):
+        self.base_url = base_url.rstrip("/")
+        self.timeout = timeout
 
-            for addr in test_addresses:
-                try:
-                    response = requests.get(f"{addr}/health", timeout=2)
-                    if response.status_code == 200:
-                        self.base_url = addr
-                        logger.info(f"✅ Connected to crawler at: {addr}")
-                        return
-                except:
-                    continue
+    def download_single(self, url: str) -> str | None:
+        resp = requests.post(f"{self.base_url}/v1/jobs/", json={"url": url}, timeout=self.timeout)
+        resp.raise_for_status()
+        job_id = resp.json()["job_id"]
 
-            self.base_url = "http://localhost:8000"
-            logger.warning("⚠️ Using fallback address - crawler might not be reachable")
-        else:
-            self.base_url = base_url.rstrip('/')
+        for _ in range(120):
+            r = requests.get(f"{self.base_url}/v1/jobs/{job_id}/status", timeout=self.timeout)
+            r.raise_for_status()
+            data = r.json()
+            state = data.get("state")
 
-    def test_connection(self) -> bool:
-        try:
-            response = requests.get(f"{self.base_url}/health", timeout=5)
-            return response.status_code == 200
-        except:
-            return False
+            if state == "SUCCESS":
+                result_resp = requests.get(f"{self.base_url}/v1/jobs/{job_id}/result", timeout=self.timeout)
+                result_resp.raise_for_status()
+                result_data = result_resp.json()
+                body = result_data.get("body")
 
-    def download_single(self, url: str) -> Optional[str]:
-        try:
-            logger.info(f"Downloading URL: {url}")
+                if body:
+                    return decode_html_content(body)
+                return body
 
-            job_payload = {
-                'url': url,
-                'timeout': 30
-            }
-
-            response = requests.post(f'{self.base_url}/v1/jobs/', json=job_payload)
-
-            if response.status_code != 202:
-                logger.error(f"Failed to create job: {response.status_code} - {response.text}")
+            if state in ("FAILURE", "REVOKED"):
+                logger.warning(f"Job {job_id} failed for {url}: state={state}")
                 return None
-            print(response.text)
-            job_id = response.json()['job_id']
-            logger.info(f"Created job: {job_id} for URL: {url}")
 
-            for attempt in range(12):
-                time.sleep(10)
+            time.sleep(0.5)
 
-                result_response = requests.get(f'{self.base_url}/v1/jobs/{job_id}/result')
+        logger.warning(f"Timeout waiting job {job_id} for {url}")
+        return None
 
-                if result_response.status_code == 200:
-                    result = result_response.json()
+    def download_batch(self, urls: list[str], headers: dict | None = None, per_request_timeout: int | None = None,
+                       poll_interval: float = 0.5, max_wait_seconds: int = 120) -> dict[str, str | None]:
+        if not urls:
+            return {}
 
-                    if result.get('error'):
-                        logger.error(f"Crawler error: {result['error']}")
-                        return None
+        payload = {
+            "urls": urls,
+            "headers": headers or {"User-Agent": "Mozilla/5.0"},
+            "timeout": per_request_timeout or self.timeout
+        }
 
-                    body = result.get('body', '')
-                    if body:
-                        try:
-                            decoded = base64.b64decode(body)
-                            html = gzip.decompress(decoded).decode('utf-8')
-                            logger.info(f"Successfully downloaded {len(html)} characters")
-                            return html
-                        except:
-                            logger.info(f"Downloaded plain text: {len(body)} characters")
-                            return body
+        resp = requests.post(f"{self.base_url}/v1/batches/", json=payload, timeout=self.timeout)
+        resp.raise_for_status()
+        batch_data = resp.json()
+        batch_id = batch_data["batch_id"]
 
-                logger.info(f"Waiting for result... {attempt + 1}/12")
+        deadline = time.time() + max_wait_seconds
+        while time.time() < deadline:
+            s = requests.get(f"{self.base_url}/v1/batches/{batch_id}/status", timeout=self.timeout)
+            s.raise_for_status()
+            status = s.json()
 
-            logger.warning("Timeout waiting for result")
-            return None
+            completed = status.get("completed", 0)
+            total = status.get("total", 0)
 
-        except Exception as e:
-            logger.error(f"Error downloading {url}: {e}")
-            return None
+            if completed >= total:
+                break
+            time.sleep(poll_interval)
+
+        r = requests.get(f"{self.base_url}/v1/batches/{batch_id}/results", timeout=self.timeout)
+        r.raise_for_status()
+        data = r.json()
+
+        results: dict[str, str | None] = {}
+
+        if isinstance(data, list):
+            items = data
+        elif isinstance(data, dict) and "results" in data:
+            items = data["results"]
+        else:
+            logger.error(f"Unexpected batch results format: {type(data)}")
+            return results
+
+        for item in items:
+            url = item.get("url")
+            body = item.get("body")
+            error = item.get("error")
+
+            if body and not error:
+                results[url] = decode_html_content(body)
+            else:
+                results[url] = None
+
+        return results

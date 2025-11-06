@@ -18,11 +18,15 @@ class LoadTasks:
             for i, url in enumerate(job_urls):
                 try:
                     djinni_id = int(url.split('/jobs/')[1].split('-')[0])
+                    page_number = (i // 20) + 1
+                    position_on_page = (i % 20) + 1
+                    global_position = i + 1
+
                     cursor.execute("""
                                    INSERT INTO job_catalog (djinni_id, url, page_number, position_on_page, global_position)
                                    VALUES (%s, %s, %s, %s, %s)
                                    ON CONFLICT (djinni_id, catalog_scraped_at) DO NOTHING
-                                   """, (djinni_id, url, 1, i + 1, i + 1))
+                                   """, (djinni_id, url, page_number, position_on_page, global_position))
                     saved_count += 1
                 except Exception as e:
                     logger.error(f"Error saving URL {url}: {e}")
@@ -59,3 +63,43 @@ class LoadTasks:
             conn.commit()
 
         return f"Saved {companies_saved} companies and {jobs_saved} jobs"
+
+    def load_from_files(self, **context):
+        import json
+        import os
+        import glob
+
+        data_dir = context['task_instance'].xcom_pull(key='scraped_data_dir', task_ids='scrape_jobs')
+
+        if not data_dir or not os.path.exists(data_dir):
+            return "No scraped data found"
+
+        json_files = glob.glob(f"{data_dir}/job_*.json")
+        logger.info(f"Found {len(json_files)} job files to process")
+
+        companies_processed = 0
+        jobs_processed = 0
+
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+
+            for file_path in json_files[:]:
+                try:
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        job_data = json.load(f)
+
+                    company_id = None
+                    if job_data.get('company_name'):
+                        company_id = upsert_company(cursor, job_data)
+                        if company_id:
+                            companies_processed += 1
+
+                    upsert_job(cursor, job_data, company_id)
+                    jobs_processed += 1
+
+                except Exception as e:
+                    logger.error(f"Error processing {file_path}: {e}")
+
+            conn.commit()
+
+        return f"Loaded {companies_processed} companies and {jobs_processed} jobs"

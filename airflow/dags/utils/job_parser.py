@@ -20,8 +20,15 @@ def extract_jsonld_data(doc) -> Dict[str, Any]:
                     'url': data.get('url'),
                     'date_posted': data.get('datePosted', '').split('T')[0] if data.get('datePosted') else None,
                     'employment_type': data.get('employmentType'),
-                    'industry': data.get('industry'),
+                    'domain': data.get('industry').title(),
+                    'job_location_type': data.get('jobLocationType'),
+                    'direct_apply': data.get('directApply'),
+                    'valid_through': data.get('validThrough', '').split('T')[0] if data.get('validThrough') else None,
+                    'role': data.get('category'),
                 }
+
+                if data.get('jobLocationType') == 'TELECOMMUTE':
+                    result['remote_info'] = 'Full Remote'
 
                 if data.get('estimatedSalary'):
                     salary = data['estimatedSalary']
@@ -41,8 +48,8 @@ def extract_jsonld_data(doc) -> Dict[str, Any]:
                     result['company_website'] = org.get('sameAs')
 
                 return result
-    except:
-        pass
+    except Exception as e:
+        logger.warning(f"JSON-LD parsing error: {e}")
     return {}
 
 
@@ -111,10 +118,10 @@ def extract_xpath_only_fields(doc) -> Dict[str, Any]:
         'role': safe_xpath_text(doc, "//ul[@id='job_extra_info']//div[@class='fw-medium']"),
         'language_requirements': safe_xpath_text(doc,
                                                  "//li[.//*[contains(text(),'Beginner') or contains(text(), 'Intermediate')]]"),
+        'hiring_type': safe_xpath_text(doc, "//div[contains(.//span/@class, 'journal')]/following::div"),
         'product_type': safe_xpath_text(doc, "//div[contains(span/@class, 'briefcase ')]/following::div"),
-        'skills': extract_skills(doc),
-        'djinni_company_url': extract_company_djinni_url(doc),
         'countries': safe_xpath_text(doc, "//span[contains(@class,'location-text')]"),
+        'domain': safe_xpath_text(doc, "//ul[@id='job_extra_info']//div[@class='fw-medium']")
     }
 
     result.update(extract_stats(doc))

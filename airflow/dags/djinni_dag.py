@@ -30,7 +30,7 @@ dag = DAG(
     tags=['djinni', 'etl', 'jobs']
 )
 
-extract_tasks = ExtractTasks(max_pages=20, max_jobs=300)
+extract_tasks = ExtractTasks(max_pages=700, max_jobs=11000)
 transform_tasks = TransformTasks()
 load_tasks = LoadTasks()
 report_tasks = ReportTasks()
@@ -53,9 +53,9 @@ scrape_task = PythonOperator(
     dag=dag
 )
 
-save_jobs_task = PythonOperator(
-    task_id='save_jobs',
-    python_callable=load_tasks.save_jobs_to_db,
+load_files_task = PythonOperator(
+    task_id='load_from_files',
+    python_callable=load_tasks.load_from_files,
     dag=dag
 )
 
@@ -65,4 +65,4 @@ report_task = PythonOperator(
     dag=dag
 )
 
-extract_task >> save_catalog_task >> scrape_task >> save_jobs_task >> report_task
+extract_task >> save_catalog_task >> scrape_task >> load_files_task >> report_task

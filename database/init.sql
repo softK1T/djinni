@@ -32,7 +32,7 @@ CREATE TABLE jobs
 
     catalog_id            INTEGER REFERENCES job_catalog (id),
 
-    title                 VARCHAR(500)        NOT NULL,
+    title                 VARCHAR(500),
     role                  VARCHAR(200),
     company_id            INTEGER REFERENCES companies (id),
 
@@ -54,10 +54,6 @@ CREATE TABLE jobs
     description           TEXT,
     tags                  TEXT,
 
-    all_time_views        INTEGER     DEFAULT 0,
-    all_time_applications INTEGER     DEFAULT 0,
-    all_time_read         INTEGER     DEFAULT 0,
-    all_time_responded    INTEGER     DEFAULT 0,
     last_views            INTEGER     DEFAULT 0,
     last_applications     INTEGER     DEFAULT 0,
     last_read             INTEGER     DEFAULT 0,

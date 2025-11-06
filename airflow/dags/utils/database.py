@@ -54,7 +54,7 @@ def upsert_job(cursor, job_data, company_id):
                                      domain, product_type, hiring_type,
                                      description, tags,
                                      last_views, last_applications, last_read, last_responded,
-                                     is_active)
+                                     posted_date, is_active)
                    VALUES (%s, %s, %s, %s, %s,
                            %s, %s, %s,
                            %s, %s, %s,
@@ -62,7 +62,7 @@ def upsert_job(cursor, job_data, company_id):
                            %s, %s, %s,
                            %s, %s,
                            %s, %s, %s, %s,
-                           %s)
+                           %s, %s)
                    ON CONFLICT (djinni_id) DO UPDATE SET title             = EXCLUDED.title,
                                                          company_id        = EXCLUDED.company_id,
                                                          salary_min        = EXCLUDED.salary_min,
@@ -71,6 +71,7 @@ def upsert_job(cursor, job_data, company_id):
                                                          last_applications = EXCLUDED.last_applications,
                                                          last_read         = EXCLUDED.last_read,
                                                          last_responded    = EXCLUDED.last_responded,
+                                                         posted_date       = COALESCE(EXCLUDED.posted_date, jobs.posted_date),
                                                          updated_at        = NOW()
                    """, (
                        job_data.get('djinni_id'), job_data.get('url'), job_data.get('title'),
@@ -82,5 +83,5 @@ def upsert_job(cursor, job_data, company_id):
                        job_data.get('description'), job_data.get('tags'),
                        job_data.get('last_views'), job_data.get('last_applications'),
                        job_data.get('last_read'), job_data.get('last_responded'),
-                       True
+                       job_data.get('date_posted'), True
                    ))

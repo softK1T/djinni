@@ -1,6 +1,7 @@
 import logging
 from utils.crawler_client import CrawlerClient
-from utils.job_parser import extract_job_urls_from_catalog_page
+from utils.job_parser import extract_job_urls_from_catalog_page, safe_xpath_text
+from lxml import html
 
 logger = logging.getLogger(__name__)
 
@@ -14,22 +15,29 @@ class ExtractTasks:
         crawler = CrawlerClient()
         base_url = "https://djinni.co/jobs/"
         all_job_urls = []
-
+        pages_total = 0
         for page in range(1, self.max_pages + 1):
             catalog_url = f"{base_url}?page={page}"
             logger.info(f"Processing catalog page {page}: {catalog_url}")
 
-            html = crawler.download_single(catalog_url)
-            if not html:
+            html_text = crawler.download_single(catalog_url)
+            if pages_total == 0:
+                doc = html.fromstring(html_text)
+                pages_total = int(safe_xpath_text(doc, "(//a[@class='page-link'])[last()-1]"))
+                logger.info(f"Pages total: {pages_total}")
+
+            if not html_text:
                 logger.warning(f"Failed to download page {page}")
                 continue
-            logger.info(f"Page {page} HTML length: {len(html)} chars")
-            if len(html) < 1000:
-                logger.warning(f"Page {page} HTML too short, content: {html[:500]}")
+            logger.info(f"Page {page} HTML length: {len(html_text)} chars")
+            if len(html_text) < 1000:
+                logger.warning(f"Page {page} HTML too short, content: {html_text[:500]}")
 
-            job_urls = extract_job_urls_from_catalog_page(html)
+            job_urls = extract_job_urls_from_catalog_page(html_text)
             all_job_urls.extend(job_urls)
             logger.info(f"Page {page}: found {len(job_urls)} jobs")
+            if page == pages_total:
+                break
 
         unique_urls = list(set(all_job_urls))
         logger.info(f"Total unique job URLs found: {len(unique_urls)}")

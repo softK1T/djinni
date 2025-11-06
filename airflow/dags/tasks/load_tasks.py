@@ -69,7 +69,11 @@ class LoadTasks:
         import os
         import glob
 
-        data_dir = context['task_instance'].xcom_pull(key='scraped_data_dir', task_ids='scrape_jobs')
+        data_dir = context.get('params', {}).get('folder_path')
+
+        # ЕСЛИ НЕТ - ТО ИЗ XCOM (для старого DAG'а)
+        if not data_dir:
+            data_dir = context['task_instance'].xcom_pull(key='scraped_data_dir', task_ids='scrape_jobs')
 
         if not data_dir or not os.path.exists(data_dir):
             return "No scraped data found"

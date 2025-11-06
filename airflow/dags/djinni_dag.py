@@ -24,7 +24,7 @@ dag = DAG(
     'djinni_etl_pipeline',
     default_args=default_args,
     description='Complete ETL pipeline for djinni.co job scraping',
-    schedule_interval=timedelta(hours=6),
+    schedule_interval=timedelta(hours=24),
     catchup=False,
     max_active_runs=1,
     tags=['djinni', 'etl', 'jobs']

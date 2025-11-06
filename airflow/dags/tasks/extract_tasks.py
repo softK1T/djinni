@@ -45,3 +45,4 @@ class ExtractTasks:
         limited_urls = unique_urls[:self.max_jobs]
         context['task_instance'].xcom_push(key='job_urls', value=limited_urls)
         return f"Extracted {len(unique_urls)} job URLs (processing first {len(limited_urls)})"
+
